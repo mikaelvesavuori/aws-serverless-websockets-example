@@ -1,0 +1,107 @@
+service: websockets-example
+
+provider:
+  name: aws
+  runtime: nodejs16.x
+  stage: ${opt:stage, 'shared'}
+  region: ${opt:region, 'eu-north-1'}
+  memorySize: ${opt:memory, 1024}
+  timeout: 10
+  logRetentionInDays: 7
+  versionFunctions: false
+  deploymentBucket:
+    blockPublicAccess: true
+    maxPreviousDeploymentArtifacts: 5
+    serverSideEncryption: AES256
+  stackTags:
+    Usage: ${self:service}
+  tags:
+    Usage: ${self:service}
+  apiGateway:
+    minimumCompressionSize: 1024
+  websocket:
+    useProviderTags: true
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - xray:PutTelemetryRecords
+            - xray:PutTraceSegments
+          Resource:
+            - "*"
+        - Effect: "Allow"
+          Action:
+            - dynamodb:Scan
+            - dynamodb:Query
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:DeleteItem
+          Resource: ${self:custom.aws.databaseArn}
+        - Effect: Allow
+          Action:
+            - execute-api:ManageConnections
+          Resource:
+            - arn:aws:execute-api:*:*:**/@connections/*
+  environment:
+    REGION: ${self:provider.region}
+    TABLE_NAME: ${self:custom.config.tableName}
+
+plugins:
+  - serverless-webpack
+  - serverless-offline
+  - serverless-iam-roles-per-function
+
+package:
+  individually: true
+  patterns:
+    - node_modules/aws-sdk/**
+    - node_modules/aws-lambda/**
+
+custom:
+  config:
+    awsAccountNumber: 876265053232 # EDIT THIS TO YOUR VALUE
+    tableName: AppConnectionTable
+  aws:
+    databaseArn: arn:aws:dynamodb:${self:provider.region}:${self:custom.config.awsAccountNumber}:table/${self:custom.config.tableName}
+  webpack:
+    webpackConfig: 'webpack.config.js'
+    includeModules: true
+    packager: 'npm'
+    excludeFiles: ./**/*.test.ts
+
+functions:
+  defaultHandler:
+    handler: src/Default.handler
+    events:
+      - websocket:
+          route: $default
+  connectHandler:
+    handler: src/OnConnect.handler
+    events:
+      - websocket:
+          route: $connect
+  disconnectHandler:
+    handler: src/OnDisconnect.handler
+    events:
+      - websocket:
+          route: $disconnect
+  sendHandler:
+    handler: src/SendMessage.handler
+    events:
+      - websocket:
+          route: sendMessage
+
+resources:
+  Resources:
+    MessageTable:
+      Type: "AWS::DynamoDB::Table"
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: connectionId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: connectionId
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        TableName: AppConnectionTable
